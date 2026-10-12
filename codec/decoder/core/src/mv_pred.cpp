@@ -315,6 +315,12 @@ int32_t GetColocatedMb (PWelsDecoderContext pCtx, MbType& mbType, SubMbType& sub
   mbType = GetMbType (pCurDqLayer)[iMbXy];
 
   PPicture colocPic = pCtx->sRefPic.pRefList[LIST_1][0];
+  if (colocPic == NULL) {
+    SLogContext* pLogCtx = & (pCtx->sLogCtx);
+    WelsLog (pLogCtx, WELS_LOG_ERROR, "Colocated Ref Picture for B-Slice is lost, B-Slice decoding cannot be continued!");
+    return GENERATE_ERROR_NO (ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
+  }
+
   if (GetThreadCount (pCtx) > 1) {
     if (16 * pCurDqLayer->iMbY > pCtx->lastReadyHeightOffset[1][0]) {
       if (colocPic->pReadyEvent[pCurDqLayer->iMbY].isSignaled != 1) {
@@ -322,12 +328,6 @@ int32_t GetColocatedMb (PWelsDecoderContext pCtx, MbType& mbType, SubMbType& sub
       }
       pCtx->lastReadyHeightOffset[1][0] = 16 * pCurDqLayer->iMbY;
     }
-  }
-
-  if (colocPic == NULL) {
-    SLogContext* pLogCtx = & (pCtx->sLogCtx);
-    WelsLog (pLogCtx, WELS_LOG_ERROR, "Colocated Ref Picture for B-Slice is lost, B-Slice decoding cannot be continued!");
-    return GENERATE_ERROR_NO (ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
   }
 
   MbType coloc_mbType = colocPic->pMbType[iMbXy];
@@ -395,7 +395,7 @@ int32_t PredMvBDirectSpatial (PWelsDecoderContext pCtx, int16_t iMvp[LIST_A][2],
   int32_t ret = ERR_NONE;
   PDqLayer pCurDqLayer = pCtx->pCurDqLayer;
   int32_t iMbXy = pCurDqLayer->iMbXyIndex;
-  bool bSkipOrDirect = (IS_SKIP (GetMbType (pCurDqLayer)[iMbXy]) | IS_DIRECT (GetMbType (pCurDqLayer)[iMbXy])) > 0;
+  bool bSkipOrDirect = (IS_SKIP (GetMbType (pCurDqLayer)[iMbXy]) || IS_DIRECT (GetMbType (pCurDqLayer)[iMbXy]));
 
   MbType mbType;
   ret = GetColocatedMb (pCtx, mbType, subMbType);
@@ -615,7 +615,7 @@ int32_t PredBDirectTemporal (PWelsDecoderContext pCtx, int16_t iMvp[LIST_A][2], 
   int32_t ret = ERR_NONE;
   PDqLayer pCurDqLayer = pCtx->pCurDqLayer;
   int32_t iMbXy = pCurDqLayer->iMbXyIndex;
-  bool bSkipOrDirect = (IS_SKIP (GetMbType (pCurDqLayer)[iMbXy]) | IS_DIRECT (GetMbType (pCurDqLayer)[iMbXy])) > 0;
+  bool bSkipOrDirect = (IS_SKIP (GetMbType (pCurDqLayer)[iMbXy]) || IS_DIRECT (GetMbType (pCurDqLayer)[iMbXy]));
 
   MbType mbType;
   ret = GetColocatedMb (pCtx, mbType, subMbType);

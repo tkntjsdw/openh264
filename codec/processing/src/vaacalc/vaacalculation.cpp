@@ -84,7 +84,7 @@ void CVAACalculation::InitVaaFuncs (SVaaFuncs& sVaaFuncs, int32_t iCpuFlag) {
   }
 #endif//HAVE_NEON
 
-#ifdef HAVE_NEON_AARCH64
+#if defined(HAVE_NEON_AARCH64) && defined(__aarch64__)
   if ((iCpuFlag & WELS_CPU_NEON) == WELS_CPU_NEON) {
     sVaaFuncs.pfVAACalcSad       = VAACalcSad_AArch64_neon;
     sVaaFuncs.pfVAACalcSadBgd    = VAACalcSadBgd_AArch64_neon;
@@ -103,6 +103,18 @@ void CVAACalculation::InitVaaFuncs (SVaaFuncs& sVaaFuncs, int32_t iCpuFlag) {
     sVaaFuncs.pfVAACalcSadVar    = VAACalcSadVar_mmi;
   }
 #endif//HAVE_MMI
+
+#ifdef HAVE_LSX
+  if ((iCpuFlag & WELS_CPU_LSX) == WELS_CPU_LSX) {
+    sVaaFuncs.pfVAACalcSad       = VAACalcSad_lsx;
+    sVaaFuncs.pfVAACalcSadBgd    = VAACalcSadBgd_lsx;
+  }
+#endif//HAVE_LSX
+#ifdef HAVE_LASX
+  if ((iCpuFlag & WELS_CPU_LASX) == WELS_CPU_LASX) {
+    sVaaFuncs.pfVAACalcSadBgd    = VAACalcSadBgd_lasx;
+  }
+#endif//HAVE_LASX
 }
 
 EResult CVAACalculation::Process (int32_t iType, SPixMap* pSrcPixMap, SPixMap* pRefPixMap) {

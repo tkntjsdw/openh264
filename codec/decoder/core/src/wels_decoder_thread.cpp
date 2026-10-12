@@ -39,25 +39,6 @@
  */
 
 
-#ifdef __linux__
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-#include <sched.h>
-#elif !defined(_WIN32) && !defined(__CYGWIN__)
-#include <sys/types.h>
-#include <sys/param.h>
-#include <unistd.h>
-#ifndef __Fuchsia__
-#include <sys/sysctl.h>
-#endif
-#ifdef __APPLE__
-#define HW_NCPU_NAME "hw.logicalcpu"
-#else
-#define HW_NCPU_NAME "hw.ncpu"
-#endif
-#endif
-
 #include "wels_decoder_thread.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -147,9 +128,11 @@ void SemDestroy (SWelsDecSemphore* s) {
 static void getTimespecFromTimeout (struct timespec* ts, int32_t timeout) {
   struct timeval tv;
   gettimeofday (&tv, 0);
-  ts->tv_nsec = tv.tv_usec * 1000 + timeout * 1000000;
-  ts->tv_sec = tv.tv_sec + ts->tv_nsec / 1000000000;
-  ts->tv_nsec %= 1000000000;
+  const int64_t kNanosecondsPerSecond = 1000000000LL;
+  const int64_t iTimeoutNanoseconds = static_cast<int64_t> (tv.tv_usec) * 1000LL
+                                      + static_cast<int64_t> (timeout) * 1000000LL;
+  ts->tv_sec = tv.tv_sec + static_cast<time_t> (iTimeoutNanoseconds / kNanosecondsPerSecond);
+  ts->tv_nsec = static_cast<long> (iTimeoutNanoseconds % kNanosecondsPerSecond);
 }
 int EventCreate (SWelsDecEvent* e, int manualReset, int initialState) {
   if (pthread_mutex_init (& (e->m), NULL))

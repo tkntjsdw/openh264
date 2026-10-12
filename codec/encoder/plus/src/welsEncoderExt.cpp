@@ -418,6 +418,10 @@ int CWelsH264SVCEncoder ::EncodeFrameInternal (const SSourcePicture*  pSrcPic, S
              kiEncoderReturn);
     WelsUninitEncoderExt (&m_pEncContext);
     return cmMallocMemeError;
+  } else if (kiEncoderReturn == ENC_RETURN_INVALIDINPUT) {
+    WelsLog (&m_pWelsTrace->m_sLogCtx, WELS_LOG_ERROR, "CWelsH264SVCEncoder::EncodeFrame() invalid input, err=%d",
+             kiEncoderReturn);
+    return cmUnsupportedData;
   } else if ((kiEncoderReturn != ENC_RETURN_SUCCESS) && (kiEncoderReturn == ENC_RETURN_CORRECTED)) {
     WelsLog (&m_pWelsTrace->m_sLogCtx, WELS_LOG_ERROR, "unexpected return(%d) from EncodeFrameInternal()!",
              kiEncoderReturn);
@@ -1056,7 +1060,7 @@ int CWelsH264SVCEncoder::SetOption (ENCODER_OPTION eOptionId, void* pOption) {
       return cmInitParaError;
     }
     SWelsSvcCodingParam sConfig;
-    memcpy (&sConfig, m_pEncContext->pSvcParam, sizeof (SWelsSvcCodingParam));
+    memcpy ((void*) &sConfig, m_pEncContext->pSvcParam, sizeof (SWelsSvcCodingParam));
     sConfig.eSpsPpsIdStrategy = eNewStrategy;
     WelsLog (&m_pWelsTrace->m_sLogCtx, WELS_LOG_INFO, " CWelsH264SVCEncoder::SetOption eSpsPpsIdStrategy = %d ",
              sConfig.eSpsPpsIdStrategy);
@@ -1282,6 +1286,7 @@ int CWelsH264SVCEncoder::GetOption (ENCODER_OPTION eOptionId, void* pOption) {
     pStatistics->fAverageFrameRate = pEncStatistics->fAverageFrameRate;
     pStatistics->fLatestFrameRate = pEncStatistics->fLatestFrameRate;
     pStatistics->uiBitRate = pEncStatistics->uiBitRate;
+    pStatistics->uiAverageFrameQP = pEncStatistics->uiAverageFrameQP;
 
     pStatistics->uiInputFrameCount = pEncStatistics->uiInputFrameCount;
     pStatistics->uiSkippedFrameCount = pEncStatistics->uiSkippedFrameCount;

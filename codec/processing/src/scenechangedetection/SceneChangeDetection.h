@@ -83,7 +83,7 @@ class CSceneChangeDetectorVideo {
     }
 #endif
 
-#ifdef HAVE_NEON_AARCH64
+#if defined(HAVE_NEON_AARCH64) && defined(__aarch64__)
     if (iCpuFlag & WELS_CPU_NEON) {
       m_pfSad = WelsProcessingSampleSad8x8_AArch64_neon;
     }
@@ -92,6 +92,12 @@ class CSceneChangeDetectorVideo {
 #ifdef HAVE_MMI
     if (iCpuFlag & WELS_CPU_MMI) {
       m_pfSad = WelsSampleSad8x8_mmi;
+    }
+#endif
+
+#ifdef HAVE_LASX
+    if (iCpuFlag & WELS_CPU_LASX) {
+      m_pfSad = WelsSampleSad8x8_lasx;
     }
 #endif
 

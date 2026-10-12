@@ -32,7 +32,7 @@ LOCAL_SRC_FILES := \
 # Header Includes
 #
 LOCAL_C_INCLUDES := \
-            $(LOCAL_PATH)/../../../../api/svc \
+            $(LOCAL_PATH)/../../../../api/wels \
             $(LOCAL_PATH)/../../../../console/enc/inc \
             $(LOCAL_PATH)/../../../../console/common/inc \
             $(LOCAL_PATH)/../../../../encoder/core/inc \
@@ -44,6 +44,7 @@ LOCAL_C_INCLUDES := \
 # Compile Flags and Link Libraries
 #
 LOCAL_CFLAGS := -DANDROID_NDK
+LOCAL_LDFLAGS += -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
 
 LOCAL_LDLIBS := -llog
 LOCAL_SHARED_LIBRARIES := wels

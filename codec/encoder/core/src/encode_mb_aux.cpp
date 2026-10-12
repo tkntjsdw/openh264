@@ -455,7 +455,7 @@ int32_t WelsHadamardQuant2x2Skip_neon (int16_t* pRes, int16_t iFF,  int16_t iMF)
   return WelsHadamardQuant2x2SkipKernel_neon (pRes, iThreshold);
 }
 #endif
-#ifdef HAVE_NEON_AARCH64
+#if defined(HAVE_NEON_AARCH64) && defined(__aarch64__)
 int32_t WelsHadamardQuant2x2Skip_AArch64_neon (int16_t* pRes, int16_t iFF,  int16_t iMF) {
   int16_t iThreshold = ((1 << 16) - 1) / iMF - iFF;
   return WelsHadamardQuant2x2SkipKernel_AArch64_neon (pRes, iThreshold);
@@ -564,7 +564,7 @@ void WelsInitEncodingFuncs (SWelsFuncPtrList* pFuncList, uint32_t  uiCpuFlag) {
   }
 #endif
 
-#if defined(HAVE_NEON_AARCH64)
+#if defined(HAVE_NEON_AARCH64) && defined(__aarch64__)
   if (uiCpuFlag & WELS_CPU_NEON) {
     pFuncList->pfQuantizationHadamard2x2        = WelsHadamardQuant2x2_AArch64_neon;
     pFuncList->pfQuantizationHadamard2x2Skip    = WelsHadamardQuant2x2Skip_AArch64_neon;
@@ -622,6 +622,22 @@ void WelsInitEncodingFuncs (SWelsFuncPtrList* pFuncList, uint32_t  uiCpuFlag) {
     pFuncList->pfCopy16x16NotAligned    = WelsCopy16x16_msa;
     pFuncList->pfCopy16x8NotAligned     = WelsCopy16x8_msa;
   }
+#endif
+
+#if defined(HAVE_LSX)
+  if (uiCpuFlag & WELS_CPU_LSX) {
+    pFuncList->pfCopy8x8Aligned         = WelsCopy8x8_lsx;
+    pFuncList->pfCopy16x16Aligned       = WelsCopy16x16_lsx;
+    pFuncList->pfCopy16x16NotAligned    = WelsCopy16x16NotAligned_lsx;
+    pFuncList->pfQuantizationFour4x4    = WelsQuantFour4x4_lsx;
+    pFuncList->pfQuantizationFour4x4Max = WelsQuantFour4x4Max_lsx;
+  }
+#endif
+#if defined(HAVE_LASX)
+  if (uiCpuFlag & WELS_CPU_LASX) {
+    pFuncList->pfDctT4                  = WelsDctT4_lasx;
+    pFuncList->pfDctFourT4              = WelsDctFourT4_lasx;
+}
 #endif
 }
 }

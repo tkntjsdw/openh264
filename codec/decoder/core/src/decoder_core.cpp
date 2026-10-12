@@ -465,7 +465,7 @@ int32_t ParseRefPicListReordering (PBitStringAux pBs, PSliceHeader pSh) {
         const uint32_t kuiIdc = uiCode;
 
         //Fixed the referrence list reordering crash issue.(fault kIdc value > 3 case)---
-        if ((iIdx >= MAX_REF_PIC_COUNT) || (kuiIdc > 3)) {
+        if (((iIdx >= MAX_REF_PIC_COUNT) && (kuiIdc != 3)) || (kuiIdc > 3)) {
           return GENERATE_ERROR_NO (ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_REORDERING);
         }
         pRefPicListReordering->sReorderingSyn[iList][iIdx].uiReorderingOfPicNumsIdc = kuiIdc;
@@ -544,7 +544,7 @@ int32_t ParseDecRefPicMarking (PWelsDecoderContext pCtx, PBitStringAux pBs, PSli
           bMmco4Exist = true;
           WELS_READ_VERIFY (BsGetUe (pBs, &uiCode)); //max_long_term_frame_idx_plus1
           int32_t iMaxLongTermFrameIdx = -1 + uiCode;
-          if (iMaxLongTermFrameIdx > int32_t (pSps->uiLog2MaxFrameNum)) {
+          if (iMaxLongTermFrameIdx > pSps->iNumRefFrames) {
             //ISO/IEC 14496-10:2009(E) 7.4.3.3 Decoded reference picture marking semantics page 96
             return GENERATE_ERROR_NO (ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_MARKING);
           }
@@ -661,9 +661,16 @@ int32_t ExpandBsBuffer (PWelsDecoderContext pCtx, const int kiSrcLen) {
     return ERR_INFO_OUT_OF_MEMORY;
   }
 
-  //Calculate and set the bs start and end position
-  for (uint32_t i = 0; i <= pCtx->pAccessUnitList->uiActualUnitsNum; i++) {
-    PBitStringAux pSliceBitsRead = &pCtx->pAccessUnitList->pNalUnitsList[i]->sNalData.sVclNal.sSliceBitsRead;
+  // Retarget all queued NAL units in current AU list. uiAvailUnitsNum is the
+  // queued-NAL count that can be consumed later; using uiActualUnitsNum here
+  // can leave queued entries pointing to freed old buffer.
+  const uint32_t kuiRetargetNum = pCtx->pAccessUnitList->uiAvailUnitsNum;
+  for (uint32_t i = 0; i < kuiRetargetNum; ++i) {
+    PNalUnit pNal = pCtx->pAccessUnitList->pNalUnitsList[i];
+    if (pNal == NULL) {
+      continue;
+    }
+    PBitStringAux pSliceBitsRead = &pNal->sNalData.sVclNal.sSliceBitsRead;
     pSliceBitsRead->pStartBuf = pSliceBitsRead->pStartBuf - pCtx->sRawData.pHead + pNewBsBuff;
     pSliceBitsRead->pEndBuf   = pSliceBitsRead->pEndBuf   - pCtx->sRawData.pHead + pNewBsBuff;
     pSliceBitsRead->pCurBuf   = pSliceBitsRead->pCurBuf   - pCtx->sRawData.pHead + pNewBsBuff;
@@ -679,6 +686,7 @@ int32_t ExpandBsBuffer (PWelsDecoderContext pCtx, const int kiSrcLen) {
 
   if (pCtx->pParam->bParseOnly) {
     //Realloc sSavedData
+    uint8_t* pOldSavedBsBuff = pCtx->sSavedData.pHead;
     uint8_t* pNewSavedBsBuff = static_cast<uint8_t*> (pMa->WelsMallocz (iNewBuffLen, "pCtx->sSavedData.pHead"));
     if (pNewSavedBsBuff == NULL) {
       WelsLog (& (pCtx->sLogCtx), WELS_LOG_ERROR, "ExpandBsBuffer() Failed for malloc pNewSavedBsBuff (%d)", iNewBuffLen);
@@ -691,6 +699,21 @@ int32_t ExpandBsBuffer (PWelsDecoderContext pCtx, const int kiSrcLen) {
     pCtx->sSavedData.pStartPos = pNewSavedBsBuff + (pCtx->sSavedData.pStartPos - pCtx->sSavedData.pHead);
     pCtx->sSavedData.pCurPos   = pNewSavedBsBuff + (pCtx->sSavedData.pCurPos   - pCtx->sSavedData.pHead);
     pCtx->sSavedData.pEnd      = pNewSavedBsBuff + iNewBuffLen;
+
+    // Retarget pNalPos for all queued NALs (current AU + next AU) before freeing.
+    const uintptr_t kuiOldStart = reinterpret_cast<uintptr_t> (pOldSavedBsBuff);
+    const uintptr_t kuiOldEnd = kuiOldStart + static_cast<uintptr_t> (pCtx->iMaxBsBufferSizeInByte);
+    for (uint32_t i = 0; i < kuiRetargetNum; ++i) {
+      PNalUnit pNal = pCtx->pAccessUnitList->pNalUnitsList[i];
+      if (pNal == NULL || pNal->sNalData.sVclNal.pNalPos == NULL) {
+        continue;
+      }
+      const uintptr_t kuiNalPos = reinterpret_cast<uintptr_t> (pNal->sNalData.sVclNal.pNalPos);
+      if (kuiNalPos >= kuiOldStart && kuiNalPos < kuiOldEnd) {
+        pNal->sNalData.sVclNal.pNalPos = pNewSavedBsBuff + (kuiNalPos - kuiOldStart);
+      }
+    }
+
     pMa->WelsFree (pCtx->sSavedData.pHead, "pCtx->sSavedData.pHead");
     pCtx->sSavedData.pHead = pNewSavedBsBuff;
   }
@@ -1813,16 +1836,23 @@ void ResetCurrentAccessUnit (PWelsDecoderContext pCtx) {
     const uint32_t kuiActualNum = pCurAu->uiActualUnitsNum;
     // a more simpler method to do nal units list management prefered here
     const uint32_t kuiAvailNum  = pCurAu->uiAvailUnitsNum;
+    // Guard: counter mismatch after timeout-early-return can cause unsigned underflow.
+    if (kuiActualNum > kuiAvailNum) {
+      pCurAu->uiActualUnitsNum = pCurAu->uiAvailUnitsNum = 0;
+      return;
+    }
     const uint32_t kuiLeftNum   = kuiAvailNum - kuiActualNum;
+    // Guard: swap must stay within allocated list capacity.
+    const uint32_t kuiSwapLimit = (kuiAvailNum <= pCurAu->uiCountUnitsNum) ? kuiLeftNum : 0;
 
     // Swapping active nal unit nodes of succeeding AU with leading of list
-    while (iIdx < kuiLeftNum) {
+    while (iIdx < kuiSwapLimit) {
       PNalUnit t = pCurAu->pNalUnitsList[kuiActualNum + iIdx];
       pCurAu->pNalUnitsList[kuiActualNum + iIdx] = pCurAu->pNalUnitsList[iIdx];
       pCurAu->pNalUnitsList[iIdx] = t;
       ++ iIdx;
     }
-    pCurAu->uiActualUnitsNum = pCurAu->uiAvailUnitsNum = kuiLeftNum;
+    pCurAu->uiActualUnitsNum = pCurAu->uiAvailUnitsNum = kuiSwapLimit;
   }
 }
 
@@ -2261,7 +2291,15 @@ int32_t WelsDecodeInitAccessUnitStart (PWelsDecoderContext pCtx, SBufferInfo* pD
   pCtx->bAuReadyFlag = false;
   pCtx->pLastDecPicInfo->bLastHasMmco5 = false;
   bool bTmpNewSeqBegin = CheckNewSeqBeginAndUpdateActiveLayerSps (pCtx);
+  if (bTmpNewSeqBegin) {
+    if (pCtx->pStreamSeqNum)
+      (*pCtx->pStreamSeqNum)++;
+    else
+      pCtx->iSeqNum++;
+  }
   pCtx->bNewSeqBegin = pCtx->bNewSeqBegin || bTmpNewSeqBegin;
+  if (pCtx->pStreamSeqNum)
+    pCtx->iSeqNum = *pCtx->pStreamSeqNum;
   iErr = WelsDecodeAccessUnitStart (pCtx);
   GetVclNalTemporalId (pCtx);
 
@@ -2432,7 +2470,7 @@ int32_t InitRefPicList (PWelsDecoderContext pCtx, const uint8_t kuiNRi, int32_t 
   } else
     iRet = WelsInitRefList (pCtx, iPoc);
   if ((pCtx->eSliceType != I_SLICE && pCtx->eSliceType != SI_SLICE)) {
-#if 0
+#if 1
     if (pCtx->pSps->uiProfileIdc != 66 && pCtx->pPps->bEntropyCodingModeFlag)
       iRet = WelsReorderRefList2 (pCtx);
     else
@@ -2495,10 +2533,15 @@ int32_t DecodeCurrentAccessUnit (PWelsDecoderContext pCtx, uint8_t** ppDst, SBuf
   PWelsDecoderThreadCTX pLastThreadCtx = NULL;
   if (pCtx->pLastThreadCtx != NULL) {
     pLastThreadCtx = (PWelsDecoderThreadCTX) (pCtx->pLastThreadCtx);
-    if (pLastThreadCtx->pDec == NULL) {
-      pLastThreadCtx->pDec = PrefetchLastPicForThread (pCtx->pPicBuff,
-                             pLastThreadCtx->iPicBuffIdx);
-    }
+    // Always re-derive the cached picture from the current picture buffer.  A
+    // previously cached non-NULL pDec can dangle into a DPB that was freed or
+    // reallocated on a resolution/sequence change; writing reference metadata
+    // through such a stale pointer would be a use-after-free.
+    // PrefetchLastPicForThread() bounds-checks the index against the current
+    // buffer and returns NULL when it no longer maps to a live picture.
+    pLastThreadCtx->pDec = (pCtx->pPicBuff != NULL)
+                           ? PrefetchLastPicForThread (pCtx->pPicBuff, pLastThreadCtx->iPicBuffIdx)
+                           : NULL;
   }
   int32_t iThreadCount = GetThreadCount (pCtx);
   int32_t iPpsId = 0;
@@ -2536,19 +2579,32 @@ int32_t DecodeCurrentAccessUnit (PWelsDecoderContext pCtx, uint8_t** ppDst, SBuf
       //this prevents from possible thread-decoding hanging
       pCtx->pDec = PrefetchPic (pCtx->pPicBuff);
       if (pLastThreadCtx != NULL) {
-        pLastThreadCtx->pDec->bUsedAsRef = pLastThreadCtx->pCtx->uiNalRefIdc > 0;
-        if (pLastThreadCtx->pDec->bUsedAsRef) {
-          for (int32_t listIdx = LIST_0; listIdx < LIST_A; ++listIdx) {
-            uint32_t i = 0;
-            while (i < MAX_REF_PIC_COUNT && pLastThreadCtx->pCtx->sRefPic.pRefList[listIdx][i]) {
-              pLastThreadCtx->pDec->pRefPic[listIdx][i] = pLastThreadCtx->pCtx->sRefPic.pRefList[listIdx][i];
-              ++i;
+        if (pLastThreadCtx->pDec != NULL) {
+          pLastThreadCtx->pDec->bUsedAsRef = pLastThreadCtx->pCtx->uiNalRefIdc > 0;
+          if (pLastThreadCtx->pDec->bUsedAsRef) {
+            for (int32_t listIdx = LIST_0; listIdx < LIST_A; ++listIdx) {
+              uint32_t i = 0;
+              while (i < MAX_REF_PIC_COUNT && pLastThreadCtx->pCtx->sRefPic.pRefList[listIdx][i]) {
+                pLastThreadCtx->pDec->pRefPic[listIdx][i] = pLastThreadCtx->pCtx->sRefPic.pRefList[listIdx][i];
+                ++i;
+              }
             }
+            pLastThreadCtx->pCtx->sTmpRefPic = pLastThreadCtx->pCtx->sRefPic;
+            WelsMarkAsRef (pLastThreadCtx->pCtx, pLastThreadCtx->pDec);
+            //The assignment below replaces these lists wholesale; release what it drops.
+            WelsReleaseDroppedRefs (pCtx->pPicBuff, &pCtx->sRefPic, &pLastThreadCtx->pCtx->sTmpRefPic);
+            pCtx->sRefPic = pLastThreadCtx->pCtx->sTmpRefPic;
+          } else {
+            //The assignment below replaces these lists wholesale; release what it drops.
+            WelsReleaseDroppedRefs (pCtx->pPicBuff, &pCtx->sRefPic, &pLastThreadCtx->pCtx->sRefPic);
+            pCtx->sRefPic = pLastThreadCtx->pCtx->sRefPic;
           }
-          pLastThreadCtx->pCtx->sTmpRefPic = pLastThreadCtx->pCtx->sRefPic;
-          WelsMarkAsRef (pLastThreadCtx->pCtx, pLastThreadCtx->pDec);
-          pCtx->sRefPic = pLastThreadCtx->pCtx->sTmpRefPic;
         } else {
+          // The cached last-thread picture no longer maps to a live buffer
+          // entry (DPB was freed/reallocated).  Copy reference state without
+          // marking a stale picture as reference.
+          //The assignment below replaces these lists wholesale; release what it drops.
+          WelsReleaseDroppedRefs (pCtx->pPicBuff, &pCtx->sRefPic, &pLastThreadCtx->pCtx->sRefPic);
           pCtx->sRefPic = pLastThreadCtx->pCtx->sRefPic;
         }
       }
@@ -2698,7 +2754,6 @@ int32_t DecodeCurrentAccessUnit (PWelsDecoderContext pCtx, uint8_t** ppDst, SBuf
 
         if (iCurrIdD == kuiDependencyIdMax && iCurrIdQ == BASE_QUALITY_ID && isNewFrame) {
           iRet = InitRefPicList (pCtx, pCtx->uiNalRefIdc, pSh->iPicOrderCntLsb);
-          if (iThreadCount > 1) isNewFrame = false;
           if (iRet) {
             pCtx->bRPLRError = true;
             bAllRefComplete = false; // RPLR error, set ref pictures complete flag false
@@ -2810,7 +2865,11 @@ int32_t DecodeCurrentAccessUnit (PWelsDecoderContext pCtx, uint8_t** ppDst, SBuf
         for (int32_t i = 0; i < iThreadCount; ++i) {
           if (i == id || pThreadCtx[i - id].pCtx->uiDecodingTimeStamp == 0) continue;
           if (pThreadCtx[i - id].pCtx->uiDecodingTimeStamp < pCtx->uiDecodingTimeStamp) {
-            WAIT_EVENT (&pThreadCtx[i - id].sSliceDecodeFinish, WELS_DEC_THREAD_WAIT_INFINITE);
+            if (WAIT_EVENT (&pThreadCtx[i - id].sSliceDecodeFinish, WELS_DEC_THREAD_WAIT_TIMEOUT_MS)
+                != WELS_DEC_THREAD_WAIT_SIGNALED) {
+              pCtx->iErrorCode |= dsRefLost;
+              return GENERATE_ERROR_NO (ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
+            }
           }
         }
         pCtx->pLastDecPicInfo->uiDecodingTimeStamp = pCtx->uiDecodingTimeStamp;
@@ -2824,6 +2883,11 @@ int32_t DecodeCurrentAccessUnit (PWelsDecoderContext pCtx, uint8_t** ppDst, SBuf
       }
 
       pCtx->pLastDecPicInfo->pPreviousDecodedPictureInDpb = pCtx->pDec; //store latest decoded picture for EC
+      if (iThreadCount > 1) {
+        // Snapshot into per-thread slot; the shared pLastDecPicInfo field can be
+        // overwritten by another worker before BufferingReadyPicture() reads it.
+        pThreadCtx->pPreviousDecodedPictureInDpb = pCtx->pDec;
+      }
       pCtx->bUsedAsRef = pCtx->uiNalRefIdc > 0;
       if (iThreadCount <= 1) {
         if (pCtx->bUsedAsRef) {
@@ -2918,6 +2982,9 @@ bool CheckAndFinishLastPic (PWelsDecoderContext pCtx, uint8_t** ppDst, SBufferIn
 
       DecodeFrameConstruction (pCtx, ppDst, pDstInfo);
       pCtx->pLastDecPicInfo->pPreviousDecodedPictureInDpb = pCtx->pDec; //save ECed pic for future use
+      if (pCtx->pThreadCtx != NULL && GetThreadCount (pCtx) > 1) {
+        ((PWelsDecoderThreadCTX)pCtx->pThreadCtx)->pPreviousDecodedPictureInDpb = pCtx->pDec;
+      }
       if (pCtx->pLastDecPicInfo->sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0) {
         if (MarkECFrameAsRef (pCtx) == ERR_INFO_INVALID_PTR) {
           pCtx->iErrorCode |= dsRefListNullPtrs;

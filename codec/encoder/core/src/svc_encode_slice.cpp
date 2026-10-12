@@ -290,7 +290,14 @@ void WelsSliceHeaderWrite (sWelsEncCtx* pCtx, SBitStringAux* pBs, SDqLayer* pCur
     BsWriteUE (pBs, pSliceHeader->uiIdrPicId);
   }
 
-  BsWriteBits (pBs, pSps->iLog2MaxPocLsb, pSliceHeader->iPicOrderCntLsb);
+  if (pSps->uiPocType == 0) {
+    BsWriteBits (pBs, pSps->iLog2MaxPocLsb, pSliceHeader->iPicOrderCntLsb);
+  } else if (pSps->uiPocType == 1) {
+    // TODO: implement.
+    assert (0);
+  } else {
+    // no-op for uiPocType == 2.
+  }
 
   if (P_SLICE == pSliceHeader->eSliceType) {
     BsWriteOneBit (pBs, pSliceHeader->bNumRefIdxActiveOverrideFlag);
@@ -359,7 +366,14 @@ void WelsSliceHeaderExtWrite (sWelsEncCtx* pCtx, SBitStringAux* pBs, SDqLayer* p
     BsWriteUE (pBs, pSliceHeader->uiIdrPicId);
   }
 
-  BsWriteBits (pBs, pSps->iLog2MaxPocLsb, pSliceHeader->iPicOrderCntLsb);
+  if (pSps->uiPocType == 0) {
+    BsWriteBits (pBs, pSps->iLog2MaxPocLsb, pSliceHeader->iPicOrderCntLsb);
+  } else if (pSps->uiPocType == 1) {
+    // TODO: implement.
+    assert (0);
+  } else {
+    // no-op for uiPocType == 2.
+  }
 //  {
   if (P_SLICE == pSliceHeader->eSliceType) {
     BsWriteOneBit (pBs, pSliceHeader->bNumRefIdxActiveOverrideFlag);
@@ -900,11 +914,14 @@ int32_t InitSliceBsBuffer (SSlice* pSlice,
     pSlice->pSliceBsa      = &pSlice->sSliceBs.sBsWrite;
     pSlice->sSliceBs.pBs   = (uint8_t*)pMa->WelsMallocz (iMaxSliceBufferSize, "sSliceBs.pBs");
     if (NULL == pSlice->sSliceBs.pBs) {
+      pSlice->sSliceBs.uiBsSize = 0;
       return ENC_RETURN_MEMALLOCERR;
     }
+    pSlice->sSliceBs.uiBsSize = iMaxSliceBufferSize;
   } else {
     pSlice->pSliceBsa      = pBsWrite;
     pSlice->sSliceBs.pBs   = NULL;
+    pSlice->sSliceBs.uiBsSize = 0;
   }
   return ENC_RETURN_SUCCESS;
 }
@@ -1012,6 +1029,7 @@ int32_t InitOneSliceInThread (sWelsEncCtx* pCtx,
   pSlice->sSliceBs.uiBsPos   = 0;
   pSlice->sSliceBs.iNalIndex = 0;
   pSlice->sSliceBs.pBsBuffer = pCtx->pSliceThreading->pThreadBsBuffer[kiSlcBuffIdx];
+  pSlice->sSliceBs.uiSize    = pCtx->iFrameBsSize;
 
   return ENC_RETURN_SUCCESS;
 }

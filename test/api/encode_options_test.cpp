@@ -1316,15 +1316,16 @@ class EncodeTestAPI : public ::testing::TestWithParam<EncodeOptionParam>, public
       ptr[i] = bAllRandom ? (rand() % 256) : uiVal;
     }
     int rv = encoder_->EncodeFrame (&EncPic, &info);
-    if (0 == iCheckTypeIndex)
+    if (0 == iCheckTypeIndex) {
       ASSERT_TRUE (rv == cmResultSuccess) << "rv=" << rv;
-    else if (1 == iCheckTypeIndex)
+    } else if (1 == iCheckTypeIndex) {
       ASSERT_TRUE (rv == cmResultSuccess || rv == cmUnknownReason) << "rv=" << rv;
+    }
   }
 };
 
-INSTANTIATE_TEST_CASE_P (EncodeDecodeTestAPIBase, EncodeTestAPI,
-                         ::testing::ValuesIn (kOptionParamArray));
+INSTANTIATE_TEST_SUITE_P (EncodeDecodeTestAPIBase, EncodeTestAPI,
+                          ::testing::ValuesIn (kOptionParamArray));
 
 TEST_P (EncodeTestAPI, SetEncOptionSize) {
   EncodeOptionParam p = GetParam();
@@ -2140,8 +2141,8 @@ TEST_F (EncodeDecodeTestAPI, UnsupportedVideoSizeInput) {
   int iSliceNum    = 1;
   int iRet;
 
-  int iSrcWidth = rand() % 16;
-  int iSrcHeight = rand() % 16;
+  int iSrcWidth = rand() % 15 + 1;
+  int iSrcHeight = rand() % 15 + 1;
 
   SEncParamExt sParam;
   encoder_->GetDefaultParams (&sParam);
@@ -2309,7 +2310,8 @@ TEST_F (EncodeDecodeTestAPI,  TemporalLayerChangeDuringEncoding_Specific) {
       if ((iStepIdx < 3) && (iFrameNum == ((iTotalFrame / 3) * (iStepIdx + 1)))) {
         sParam.iTemporalLayerNum = originalTemporalLayerNum * iSteps[iStepIdx];
         sParam.iTargetBitrate = sParam.sSpatialLayers[0].iSpatialBitrate = originalBR * iSteps[iStepIdx];
-        sParam.fMaxFrameRate = sParam.sSpatialLayers[0].fFrameRate = originalFR * pow (2.0f, iSteps[iStepIdx]);
+        sParam.fMaxFrameRate = sParam.sSpatialLayers[0].fFrameRate = static_cast <float> (originalFR * pow (2.0f,
+                               iSteps[iStepIdx]));
         encoder_->SetOption (ENCODER_OPTION_SVC_ENCODE_PARAM_EXT, &sParam);
 
         bSetOption = true;

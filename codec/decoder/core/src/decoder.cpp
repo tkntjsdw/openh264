@@ -76,6 +76,7 @@ static int32_t CreatePicBuff (PWelsDecoderContext pCtx, PPicBuff* ppPicBuf, cons
   if (NULL == pPicBuf) {
     return ERR_INFO_OUT_OF_MEMORY;
   }
+  pPicBuf->pMa = pMa;
 
   pPicBuf->ppPic = (PPicture*)pMa->WelsMallocz (kiSize * sizeof (PPicture), "PPicture*");
 
@@ -114,11 +115,13 @@ static int32_t IncreasePicBuff (PWelsDecoderContext pCtx, PPicBuff* ppPicBuf, co
   }
 
   CMemoryAlign* pMa = pCtx->pMemAlign;
+  CMemoryAlign* pOldMa = (pPicOldBuf != NULL && pPicOldBuf->pMa != NULL) ? pPicOldBuf->pMa : pMa;
   pPicNewBuf = (PPicBuff)pMa->WelsMallocz (sizeof (SPicBuff), "PPicBuff");
 
   if (NULL == pPicNewBuf) {
     return ERR_INFO_OUT_OF_MEMORY;
   }
+  pPicNewBuf->pMa = pMa;
 
   pPicNewBuf->ppPic = (PPicture*)pMa->WelsMallocz (kiNewSize * sizeof (PPicture), "PPicture*");
 
@@ -148,20 +151,22 @@ static int32_t IncreasePicBuff (PWelsDecoderContext pCtx, PPicBuff* ppPicBuf, co
   pPicNewBuf->iCurrentIdx = pPicOldBuf->iCurrentIdx;
   * ppPicBuf              = pPicNewBuf;
 
-  for (int32_t i = 0; i < pPicNewBuf->iCapacity; i++) {
+  // only initialize new slots; old slots must preserve iRefCount pinned by output buffering
+  for (int32_t i = kiOldSize; i < pPicNewBuf->iCapacity; i++) {
     pPicNewBuf->ppPic[i]->bUsedAsRef = false;
     pPicNewBuf->ppPic[i]->bIsLongRef = false;
     pPicNewBuf->ppPic[i]->iRefCount = 0;
+    pPicNewBuf->ppPic[i]->pSetUnRef = NULL;
     pPicNewBuf->ppPic[i]->bIsComplete = false;
   }
 // remove old PicBuf
   if (pPicOldBuf->ppPic != NULL) {
-    pMa->WelsFree (pPicOldBuf->ppPic, "pPicOldBuf->queue");
+    pOldMa->WelsFree (pPicOldBuf->ppPic, "pPicOldBuf->queue");
     pPicOldBuf->ppPic = NULL;
   }
   pPicOldBuf->iCapacity = 0;
   pPicOldBuf->iCurrentIdx = 0;
-  pMa->WelsFree (pPicOldBuf, "pPicOldBuf");
+  pOldMa->WelsFree (pPicOldBuf, "pPicOldBuf");
   pPicOldBuf = NULL;
   return ERR_NONE;
 }
@@ -176,12 +181,14 @@ static int32_t DecreasePicBuff (PWelsDecoderContext pCtx, PPicBuff* ppPicBuf, co
   }
 
   CMemoryAlign* pMa = pCtx->pMemAlign;
+  CMemoryAlign* pOldMa = (pPicOldBuf != NULL && pPicOldBuf->pMa != NULL) ? pPicOldBuf->pMa : pMa;
 
   pPicNewBuf = (PPicBuff)pMa->WelsMallocz (sizeof (SPicBuff), "PPicBuff");
 
   if (NULL == pPicNewBuf) {
     return ERR_INFO_OUT_OF_MEMORY;
   }
+  pPicNewBuf->pMa = pMa;
 
   pPicNewBuf->ppPic = (PPicture*)pMa->WelsMallocz (kiNewSize * sizeof (PPicture), "PPicture*");
 
@@ -226,7 +233,7 @@ static int32_t DecreasePicBuff (PWelsDecoderContext pCtx, PPicBuff* ppPicBuf, co
   for (iPicIdx = iDelIdx; iPicIdx < kiOldSize; iPicIdx++) {
     if (iPrevPicIdx != iPicIdx) {
       if (pPicOldBuf->ppPic[iPicIdx] != NULL) {
-        FreePicture (pPicOldBuf->ppPic[iPicIdx], pMa);
+        FreePicture (pPicOldBuf->ppPic[iPicIdx], pOldMa);
         pPicOldBuf->ppPic[iPicIdx] = NULL;
       }
     }
@@ -240,16 +247,17 @@ static int32_t DecreasePicBuff (PWelsDecoderContext pCtx, PPicBuff* ppPicBuf, co
     pPicNewBuf->ppPic[i]->bUsedAsRef = false;
     pPicNewBuf->ppPic[i]->bIsLongRef = false;
     pPicNewBuf->ppPic[i]->iRefCount = 0;
+    pPicNewBuf->ppPic[i]->pSetUnRef = NULL;
     pPicNewBuf->ppPic[i]->bIsComplete = false;
   }
   // remove old PicBuf
   if (pPicOldBuf->ppPic != NULL) {
-    pMa->WelsFree (pPicOldBuf->ppPic, "pPicOldBuf->queue");
+    pOldMa->WelsFree (pPicOldBuf->ppPic, "pPicOldBuf->queue");
     pPicOldBuf->ppPic = NULL;
   }
   pPicOldBuf->iCapacity = 0;
   pPicOldBuf->iCurrentIdx = 0;
-  pMa->WelsFree (pPicOldBuf, "pPicOldBuf");
+  pOldMa->WelsFree (pPicOldBuf, "pPicOldBuf");
   pPicOldBuf = NULL;
 
   return ERR_NONE;
@@ -264,6 +272,9 @@ void DestroyPicBuff (PWelsDecoderContext pCtx, PPicBuff* ppPicBuf, CMemoryAlign*
     return;
 
   pPicBuf = *ppPicBuf;
+  // Free through the allocator that created this buffer.
+  if (pPicBuf->pMa != NULL)
+    pMa = pPicBuf->pMa;
   while (pPicBuf->ppPic != NULL) {
     int32_t iPicIdx = 0;
     while (iPicIdx < pPicBuf->iCapacity) {
@@ -296,12 +307,11 @@ void ResetReorderingPictureBuffers (PPictReoderingStatus pPictReoderingStatus, P
     pPictReoderingStatus->iPictInfoIndex = 0;
     pPictReoderingStatus->iMinPOC = IMinInt32;
     pPictReoderingStatus->iNumOfPicts = 0;
-    pPictReoderingStatus->iLastGOPRemainPicts = 0;
     pPictReoderingStatus->iLastWrittenPOC = IMinInt32;
     pPictReoderingStatus->iLargestBufferedPicIndex = 0;
     for (int32_t i = 0; i < pictInfoListCount; ++i) {
-      pPictInfo[i].bLastGOP = false;
       pPictInfo[i].iPOC = IMinInt32;
+      pPictInfo[i].iPicBuffIdx = -1; //ensure a deterministic invalid sentinel so error-path decoding cannot leave heap garbage
     }
     pPictInfo->sBufferInfo.iBufferStatus = 0;
 		pPictReoderingStatus->bHasBSlice = false;
@@ -442,7 +452,8 @@ static inline int32_t GetTargetRefListSize (PWelsDecoderContext pCtx) {
     iNumRefFrames = pCtx->pSps->iNumRefFrames + 2;
     int32_t  iThreadCount = GetThreadCount (pCtx);
     if (iThreadCount > 1) {
-      iNumRefFrames = MAX_REF_PIC_COUNT;
+      //due to thread and reordering buffering, it needs more dpb space
+      iNumRefFrames = MAX_DPB_COUNT + iThreadCount;
     }
   }
 
@@ -620,6 +631,7 @@ int32_t WelsOpenDecoder (PWelsDecoderContext pCtx, SLogContext* pLogCtx) {
   pCtx->bPrintFrameErrorTraceFlag = true;
   pCtx->iIgnoredErrorInfoPacketCount = 0;
   pCtx->bFrameFinish = true;
+  pCtx->iSeqNum = 0;
   return iRet;
 }
 
@@ -735,6 +747,21 @@ void GetVclNalTemporalId (PWelsDecoderContext pCtx) {
  * \note    N/A
  *************************************************************************************
  */
+// Returns false if wrapping sRawData to pHead would overwrite bytes still referenced
+// by a queued NAL's slice bit-reader, indicating the wrap is unsafe.
+static bool RawDataWrapIsClean (PWelsDecoderContext pCtx, int32_t iNewBytes) {
+  const PAccessUnit pAu = pCtx->pAccessUnitList;
+  if (pAu == NULL || pAu->pNalUnitsList == NULL || pAu->uiAvailUnitsNum == 0) return true;
+  const uint8_t* pHead = pCtx->sRawData.pHead;
+  for (uint32_t i = 0; i < pAu->uiAvailUnitsNum; ++i) {
+    const PNalUnit pNal = pAu->pNalUnitsList[i];
+    if (pNal == NULL) continue;
+    const uint8_t* pStart = pNal->sNalData.sVclNal.sSliceBitsRead.pStartBuf;
+    if (pStart != NULL && pStart >= pHead && pStart < pHead + iNewBytes) return false;
+  }
+  return true;
+}
+
 int32_t WelsDecodeBs (PWelsDecoderContext pCtx, const uint8_t* kpBsBuf, const int32_t kiBsLen,
                       uint8_t** ppDst, SBufferInfo* pDstBufInfo, SParserBsInfo* pDstBsInfo) {
   if (!pCtx->bEndOfStreamFlag) {
@@ -764,6 +791,10 @@ int32_t WelsDecodeBs (PWelsDecoderContext pCtx, const uint8_t* kpBsBuf, const in
     iSrcLength = kiBsLen - iOffset;
 
     if ((kiBsLen + 4) > (pRawData->pEnd - pRawData->pCurPos)) {
+      if (!RawDataWrapIsClean (pCtx, kiBsLen + 4)) {
+        pCtx->iErrorCode |= dsOutOfMemory;
+        return pCtx->iErrorCode;
+      }
       pRawData->pCurPos = pRawData->pHead;
     }
 
@@ -795,14 +826,13 @@ int32_t WelsDecodeBs (PWelsDecoderContext pCtx, const uint8_t* kpBsBuf, const in
           bNalStartBytes = true;
         } else if (pSrcNal[2 + iSrcIdx] == 0x03) {
           if ((3 + iSrcConsumed < iSrcLength) && pSrcNal[3 + iSrcIdx] > 0x03) {
-            pCtx->iErrorCode |= dsBitstreamError;
-            return pCtx->iErrorCode;
+            /* Just skip */
           } else {
             ST16 (pDstNal + iDstIdx, 0);
             iDstIdx      += 2;
-            iSrcIdx      += 3;
-            iSrcConsumed += 3;
           }
+          iSrcIdx      += 3;
+          iSrcConsumed += 3;
         } else { // 0x01
           bNalStartBytes = false;
 
@@ -818,8 +848,6 @@ int32_t WelsDecodeBs (PWelsDecoderContext pCtx, const uint8_t* kpBsBuf, const in
             if (pCtx->bAuReadyFlag && pCtx->pAccessUnitList->uiAvailUnitsNum != 0) {
               if (GetThreadCount (pCtx) <= 1) {
                 ConstructAccessUnit (pCtx, ppDst, pDstBufInfo);
-              } else {
-                pCtx->pAccessUnitList->uiAvailUnitsNum = 1;
               }
             }
           }
@@ -847,8 +875,16 @@ int32_t WelsDecodeBs (PWelsDecoderContext pCtx, const uint8_t* kpBsBuf, const in
             return pCtx->iErrorCode;
           }
 
+          if (pCtx->iErrorCode != ERR_NONE && !(pCtx->iErrorCode & dsDataErrorConcealed)) {
+              return pCtx->iErrorCode;
+          }
+
           pDstNal += (iDstIdx + 4); //init, increase 4 reserved zero bytes, used to store the next NAL
           if ((iSrcLength - iSrcConsumed + 4) > (pRawData->pEnd - pDstNal)) {
+            if (!RawDataWrapIsClean (pCtx, iSrcLength - iSrcConsumed + 4)) {
+              pCtx->iErrorCode |= dsOutOfMemory;
+              return pCtx->iErrorCode;
+            }
             pDstNal = pRawData->pCurPos = pRawData->pHead;
           } else {
             pRawData->pCurPos = pDstNal;
@@ -882,8 +918,6 @@ int32_t WelsDecodeBs (PWelsDecoderContext pCtx, const uint8_t* kpBsBuf, const in
       if (pCtx->bAuReadyFlag && pCtx->pAccessUnitList->uiAvailUnitsNum != 0) {
         if (GetThreadCount (pCtx) <= 1) {
           ConstructAccessUnit (pCtx, ppDst, pDstBufInfo);
-        } else {
-          pCtx->pAccessUnitList->uiAvailUnitsNum = 1;
         }
       }
     }
@@ -1079,7 +1113,7 @@ void InitPredFunc (PWelsDecoderContext pCtx, uint32_t uiCpuFlag) {
   }
 #endif//HAVE_NEON
 
-#if defined(HAVE_NEON_AARCH64)
+#if defined(HAVE_NEON_AARCH64) && defined(__aarch64__)
   if (uiCpuFlag & WELS_CPU_NEON) {
     pCtx->pIdctResAddPredFunc   = IdctResAddPred_AArch64_neon;
     pCtx->pIdctFourResAddPredFunc = IdctFourResAddPred_<IdctResAddPred_AArch64_neon>;
@@ -1168,6 +1202,14 @@ void InitPredFunc (PWelsDecoderContext pCtx, uint32_t uiCpuFlag) {
     pCtx->pGetI4x4LumaPredFunc[I4_PRED_H]     = WelsDecoderI4x4LumaPredH_mmi;
   }
 #endif//HAVE_MMI
+
+#if defined(HAVE_LSX)
+  if (uiCpuFlag & WELS_CPU_LSX) {
+    pCtx->pIdctResAddPredFunc   = IdctResAddPred_lsx;
+    pCtx->pIdctFourResAddPredFunc = IdctFourResAddPred_<IdctResAddPred_lsx>;
+    pCtx->pIdctResAddPredFunc8x8  = IdctResAddPred8x8_lsx;
+  }
+#endif
 }
 
 //reset decoder number related statistics info

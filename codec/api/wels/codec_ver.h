@@ -4,12 +4,12 @@
 
 #include "codec_app_def.h"
 
-static const OpenH264Version g_stCodecVersion  = {2, 1, 0, 2002};
-static const char* const g_strCodecVer  = "OpenH264 version:2.1.0.2002";
+static const OpenH264Version g_stCodecVersion  = {2, 7, 0, 2610};
+static const char* const g_strCodecVer  = "OpenH264 version:2.7.0.2610";
 
 #define OPENH264_MAJOR (2)
-#define OPENH264_MINOR (1)
+#define OPENH264_MINOR (7)
 #define OPENH264_REVISION (0)
-#define OPENH264_RESERVED (2002)
+#define OPENH264_RESERVED (2610)
 
 #endif  // CODEC_VER_H
